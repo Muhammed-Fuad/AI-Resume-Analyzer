@@ -47,7 +47,7 @@ The app sends the resume to an **n8n automation workflow** which processes it th
 
 | Analyzer Page | Analyzing Overlay | Result Page |
 |---|---|---|
-| ![Analyzer](Screenshots\analyze.png) | ![Overlay](screenshots/workflow.png) | ![Result](screenshots/result.png) |
+| ![Analyzer](Screenshots/analyze.png) | ![Overlay](screenshots/workflow.png) | ![Result](screenshots/result.png) |
 
 ---
 
