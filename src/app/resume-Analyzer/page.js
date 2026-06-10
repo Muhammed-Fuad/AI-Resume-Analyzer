@@ -185,136 +185,69 @@ export default function ResumeAnalyzer() {
 
   /* ── Analyze + Webhook ── */
   const handleAnalyze = async (e) => {
-    e.preventDefault();
-    if (!file) { setError("Please upload your resume."); return; }
-    setError(""); setAnalyzing(true); setDoneSteps([]); setStepIndex(0);
+  e.preventDefault();
+  if (!file) { setError("Please upload your resume."); return; }
+  setError(""); setAnalyzing(true); setDoneSteps([]); setStepIndex(0);
+
+  let payload; // ← MOVE declaration here, outside all try/catch blocks
+
+  try {
+    const fileBase64 = await toBase64(file);
+
+    const webhookPromise = fetch(WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        fileName:       file.name,
+        fileType:       file.type,
+        fileSize:       file.size,
+        fileBase64,
+        jobRole:        role,
+        jobDescription: jd,
+      }),
+    });
+
+    const [res] = await Promise.all([webhookPromise, runSteps()]);
+
+    if (!res.ok) throw new Error(`Webhook responded with status ${res.status}`);
+
+    const rawText = await res.text();
 
     try {
-      // 1. Base64 encode immediately (fast, local)
-      const fileBase64 = await toBase64(file);
+      const stripped = rawText
+        .replace(/^```(?:json)?\s*/i, "")
+        .replace(/\s*```\s*$/i, "")
+        .trim();
 
-      // 2. Fire webhook RIGHT AWAY — before animation starts
-      const webhookPromise = fetch(WEBHOOK_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fileName:       file.name,
-          fileType:       file.type,
-          fileSize:       file.size,
-          fileBase64,
-          jobRole:        role,
-          jobDescription: jd,
-        }),
-      });
+      let parsed = JSON.parse(stripped);
 
-      // 3. Run animation steps in parallel with the webhook call
-      const [res] = await Promise.all([webhookPromise, runSteps()]);
+      // unwrap array
+      payload = Array.isArray(parsed) ? parsed[0] : parsed;
 
-      if (!res.ok) throw new Error(`Webhook responded with status ${res.status}`);
+      // unwrap nested keys
+      if (payload?.data && typeof payload.data === "object") payload = payload.data;
+      if (payload?.output && typeof payload.output === "object") payload = payload.output;
 
-      // ── Robust response parsing ──────────────────────────────────────────
-      // n8n can return: plain JSON object, JSON array, or a string with
-      // markdown fences (```json ... ```) wrapping the real JSON.
-      const rawText = await res.text();
-
-      let payload;
-      try {
-        // ── Attempt 1: strip markdown fences then parse as JSON ──
-        const stripped = rawText
-          .replace(/^```(?:json)?\s*/i, "")
-          .replace(/\s*```\s*$/i, "")
-          .trim();
-
-        let parsed;
-        try {
-          parsed = JSON.parse(stripped);
-        } catch (_) {
-          // ── Attempt 2: n8n "Respond to Webhook" sent a plain text string
-          // (fields concatenated with \n). Parse it manually from the
-          // known output shape:
-          // line 0  → overall_score (number)
-          // line 1  → rating (string)
-          // line 2  → strengths[0]
-          // line 3  → strengths[1]
-          // line 4  → missing_keywords joined by comma
-          // line 5+ → improvement_recommendations joined (no separator)
-          // second-to-last → keyword_coverage.missing_keywords joined by comma
-          // last    → final_verdict.summary
-          //
-          // Because the text format is ambiguous, we rebuild a best-effort
-          // structured object so ResultPage can still render something useful.
-          console.warn("n8n returned plain text — rebuilding payload. Fix your n8n Respond to Webhook node to return JSON.");
-
-          const lines = stripped.split("\n").map(l => l.trim()).filter(Boolean);
-
-          const score  = parseInt(lines[0], 10) || 0;
-          const rating = lines[1] || "";
-
-          // strengths: lines 2 and 3 look like full sentences
-          const strengths = [];
-          let i = 2;
-          while (i < lines.length && !lines[i].includes(",") && lines[i].length > 30) {
-            strengths.push(lines[i]);
-            i++;
-          }
-
-          // missing_keywords: next line with commas
-          const missingKwLine = lines[i] || "";
-          const missing_keywords = missingKwLine.split(",").map(s => s.trim()).filter(Boolean);
-          i++;
-
-          // improvement_recommendations: collect until the last two lines
-          const improvements = [];
-          while (i < lines.length - 2) {
-            improvements.push(lines[i]);
-            i++;
-          }
-
-          // keyword_coverage.missing_keywords: second to last
-          const kwCoverage = (lines[lines.length - 2] || "").split(",").map(s => s.trim()).filter(Boolean);
-
-          // final_verdict.summary: last line
-          const verdict = lines[lines.length - 1] || "";
-
-          parsed = {
-            ats_score:                  { overall_score: score, rating },
-            strengths,
-            missing_keywords,
-            improvement_recommendations: improvements,
-            resume_issues:              [],
-            keyword_coverage:           { missing_keywords: kwCoverage },
-            final_verdict:              { summary: verdict },
-          };
-        }
-
-        // unwrap array: n8n sometimes returns [{...}]
-        payload = Array.isArray(parsed) ? parsed[0] : parsed;
-
-        // unwrap nested keys
-        if (payload?.data && typeof payload.data === "object" && !Array.isArray(payload.data)) payload = payload.data;
-        if (payload?.output && typeof payload.output === "object") payload = payload.output;
-
-      } catch (parseErr) {
-        console.error("Could not parse n8n response:", rawText);
-        throw new Error("Could not read the analysis result. Please try again.");
-      }
-
-      // 4. Attach local metadata so ResultPage can display them
-      payload.job_role  = role;
-      payload.file_name = file.name;
-
-      // 5. Save to sessionStorage for ResultPage
-      sessionStorage.setItem("atsResult", JSON.stringify(payload));
-
-      router.push("/result");
-    } catch (err) {
-      console.error("Webhook error:", err);
-      setError(err.message || "Something went wrong. Please try again.");
-      setAnalyzing(false);
-      setStepIndex(-1);
-      setDoneSteps([]);
+    } catch (parseErr) {
+      console.error("Could not parse n8n response:", rawText);
+      throw new Error("Could not read the analysis result. Please try again.");
     }
-  };
+
+    // Now payload is accessible here ✓
+    payload.job_role  = role;
+    payload.file_name = file.name;
+
+    sessionStorage.setItem("atsResult", JSON.stringify(payload));
+    router.push("/result");
+
+  } catch (err) {
+    console.error("Webhook error:", err);
+    setError(err.message || "Something went wrong. Please try again.");
+    setAnalyzing(false);
+    setStepIndex(-1);
+    setDoneSteps([]);
+  }
+};
 
   const handleReset = () => {
     setFile(null); setRole(JOB_ROLES[0]); setJd(""); setError("");
