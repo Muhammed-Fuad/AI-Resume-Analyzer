@@ -63,7 +63,7 @@ const ANALYZE_STEPS = [
   { id: "result",   label: "Fetching result"        },
 ];
 
-const WEBHOOK_URL = "https://tonystack009.app.n8n.cloud/webhook/resume-analzer.io";
+const WEBHOOK_URL = "https://tonystark009.app.n8n.cloud/webhook/ai-resume-analyzer";
 
 export default function ResumeAnalyzer() {
   const canvasRef   = useRef(null);
